@@ -1,0 +1,22 @@
+{
+  "name": "elevate-support-dashboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:fresh": "pkill -f 'vite' 2>/dev/null; sleep 1; vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "recharts": "^2.10.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.0",
+    "dotenv": "^16.3.1",
+    "vite": "^5.0.0"
+  }
+}
