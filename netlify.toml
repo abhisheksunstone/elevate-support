@@ -1,7 +1,0 @@
-[[redirects]]
-  from = "/api/jira-search"
-  to = "/.netlify/functions/jira-search"
-  status = 200
-
-[functions]
-  directory = "netlify/functions"

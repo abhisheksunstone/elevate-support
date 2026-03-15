@@ -54,12 +54,10 @@ export default async function handler(req, res) {
     const token = process.env.JIRA_API_TOKEN || process.env.VITE_JIRA_API_TOKEN;
 
     if (!email || !token) {
-      res
-        .status(500)
-        .json({
-          error:
-            "JIRA_EMAIL and JIRA_API_TOKEN (or VITE_*) must be set in Vercel environment variables",
-        });
+      res.status(500).json({
+        error:
+          "JIRA_EMAIL and JIRA_API_TOKEN must be set in Vercel (Project Settings > Environment Variables). Use JIRA_* not VITE_* — VITE_* are build-time only and are not available to serverless.",
+      });
       return;
     }
 
@@ -106,19 +104,23 @@ export default async function handler(req, res) {
     }
 
     const json = await jiraRes.json();
+    const total = json.total ?? (json.issues || []).length ?? 0;
+    // Log so you can see in Vercel Dashboard > Logs what Jira returned
+    console.log("[jira-search]", { startDate, endDate, total, jql });
 
     // Optional lightweight debug: /api/jira-search?...&meta=1
     if (req.query?.meta === "1") {
       res.status(200).json({
-        total: json.total ?? (json.issues || []).length ?? 0,
+        total,
+        jql,
+        envUsed: email === process.env.JIRA_EMAIL ? "JIRA_EMAIL" : "VITE_JIRA_EMAIL",
         warning:
-          "meta=1 is for debugging only; remove this query param for full issue payload.",
+          "meta=1 is for debugging only; remove for full issue payload.",
       });
       return;
     }
 
-    const rawTotal = json.total ?? (json.issues || []).length;
-    res.setHeader("X-Jira-Total", String(rawTotal));
+    res.setHeader("X-Jira-Total", String(total));
 
     const issues = (json.issues || []).map((issue) => {
       const f = issue.fields || {};
