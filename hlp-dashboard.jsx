@@ -222,12 +222,12 @@ function processData(rawIssues) {
   const bucket120plus = frTimes.filter(t => t > 120).length;
 
   const frBuckets = [
-    { name: "≤30m", value: bucket30, color: "#22c55e" },
-    { name: "31-60m", value: bucket60, color: "#f59e0b" },
-    { name: "61-90m", value: bucket90, color: "#f97316" },
-    { name: "91-120m", value: bucket120, color: "#ef4444" },
-    { name: "120m+", value: bucket120plus, color: "#dc2626" },
-    { name: "No Resp", value: noResp, color: "#64748b" },
+    { name: "0–30m", value: bucket30, color: "#22c55e" },
+    { name: "30–60m", value: bucket60, color: "#f59e0b" },
+    { name: "60–90m", value: bucket90, color: "#f97316" },
+    { name: "90–120m", value: bucket120, color: "#ef4444" },
+    { name: "120m", value: bucket120plus, color: "#dc2626" },
+    { name: "No Response", value: noResp, color: "#64748b" },
   ].filter(b => b.value > 0);
 
   // Assignee workload (FR + resolution)
@@ -265,15 +265,16 @@ function processData(rawIssues) {
   const resTimes = tickets.filter(t => t.resHrs !== null).map(t => t.resHrs);
   const avgRes = resTimes.length > 0 ? resTimes.reduce((a, b) => a + b, 0) / resTimes.length : 0;
 
-  // Resolution time buckets (hours): ≤4h, 4-8h, 8-12h, 12-24h, 24-48h, 48-72h, 72h+
+  // Resolution time buckets (hours): 0–4 hr, 4–12 hr, 12–24 hr, 24–48 hr, 48–72 hr, 72 hr, Unresolved
+  const openCount = tickets.length - resolved;
   const resBuckets = [
-    { name: "≤4 hr", value: resTimes.filter(h => h <= 4).length, color: "#22c55e" },
-    { name: "4hr-8hr", value: resTimes.filter(h => h > 4 && h <= 8).length, color: "#4ade80" },
-    { name: "8hr-12hr", value: resTimes.filter(h => h > 8 && h <= 12).length, color: "#a3e635" },
-    { name: "12hr-24hr", value: resTimes.filter(h => h > 12 && h <= 24).length, color: "#facc15" },
-    { name: "24hr-48hr", value: resTimes.filter(h => h > 24 && h <= 48).length, color: "#f59e0b" },
-    { name: "48hr-72hr", value: resTimes.filter(h => h > 48 && h <= 72).length, color: "#f97316" },
-    { name: "72hr+", value: resTimes.filter(h => h > 72).length, color: "#ef4444" },
+    { name: "0–4 hr", value: resTimes.filter(h => h <= 4).length, color: "#22c55e" },
+    { name: "4–12 hr", value: resTimes.filter(h => h > 4 && h <= 12).length, color: "#4ade80" },
+    { name: "12–24 hr", value: resTimes.filter(h => h > 12 && h <= 24).length, color: "#a3e635" },
+    { name: "24–48 hr", value: resTimes.filter(h => h > 24 && h <= 48).length, color: "#facc15" },
+    { name: "48–72 hr", value: resTimes.filter(h => h > 48 && h <= 72).length, color: "#f59e0b" },
+    { name: "72 hr", value: resTimes.filter(h => h > 72).length, color: "#f97316" },
+    { name: "Unresolved", value: openCount, color: "#64748b" },
   ].filter(b => b.value > 0);
 
   // Resolution by assignee for bar chart (avg hours)
@@ -320,11 +321,20 @@ export default function HLPDashboard() {
   const [filterLabel, setFilterLabel] = useState("");
   const [filterReporter, setFilterReporter] = useState("");
   const [filterNoResponse, setFilterNoResponse] = useState(""); // "" | "noResponse" | "hasResponse"
+  const [filterFrBucket, setFilterFrBucket] = useState(""); // from FR Distribution click; no UI on All Tickets
+  const [filterResBucket, setFilterResBucket] = useState(""); // from Resolution Distribution click
+  // Click-only filters: applied to All Tickets list when navigating from a chart click; dropdowns stay unchanged
+  const [filterStatusClick, setFilterStatusClick] = useState("");
+  const [filterAssigneeClick, setFilterAssigneeClick] = useState("");
+  const [filterCategoryClick, setFilterCategoryClick] = useState("");
+  const [filterLabelClick, setFilterLabelClick] = useState("");
+  const [filterReporterClick, setFilterReporterClick] = useState("");
+  const [filterNoResponseClick, setFilterNoResponseClick] = useState("");
   const [frGroupMode, setFrGroupMode] = useState("category");
   const [resGroupMode, setResGroupMode] = useState("category");
 
   const filtersRef = useRef({});
-  filtersRef.current = { status: filterStatus, assignee: filterAssignee, category: filterCategory, label: filterLabel, reporter: filterReporter, noResponse: filterNoResponse };
+  filtersRef.current = { status: filterStatus, assignee: filterAssignee, category: filterCategory, label: filterLabel, reporter: filterReporter, noResponse: filterNoResponse, frBucket: filterFrBucket, resBucket: filterResBucket, statusClick: filterStatusClick, assigneeClick: filterAssigneeClick, categoryClick: filterCategoryClick, labelClick: filterLabelClick, reporterClick: filterReporterClick, noResponseClick: filterNoResponseClick };
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -343,6 +353,28 @@ export default function HLPDashboard() {
 
   useEffect(() => { loadData(); }, []);
 
+  const clearAllFilters = () => {
+    setFilterStatus("");
+    setFilterAssignee("");
+    setFilterCategory("");
+    setFilterLabel("");
+    setFilterReporter("");
+    setFilterNoResponse("");
+    setFilterStatusClick("");
+    setFilterAssigneeClick("");
+    setFilterCategoryClick("");
+    setFilterLabelClick("");
+    setFilterReporterClick("");
+    setFilterNoResponseClick("");
+    setFilterFrBucket("");
+    setFilterResBucket("");
+  };
+
+  const switchTab = (newTab) => {
+    clearAllFilters();
+    setTab(newTab);
+  };
+
   const d = data;
   const s = d?.stats;
 
@@ -355,21 +387,58 @@ export default function HLPDashboard() {
   const uniqueReporters = [...new Set(allTickets.map(t => t.reporter || "Unknown").filter(Boolean))].sort();
 
   const OPEN_STATUS_VALUE = "__open__"; // synthetic filter: show all non-Done
+
+  const ticketMatchesFrBucket = (t, bucketName) => {
+    if (!bucketName) return true;
+    if (bucketName === "No Response") return t.frMins == null;
+    if (t.frMins == null) return false;
+    const m = t.frMins;
+    if (bucketName === "0–30m") return m <= 30;
+    if (bucketName === "30–60m") return m > 30 && m <= 60;
+    if (bucketName === "60–90m") return m > 60 && m <= 90;
+    if (bucketName === "90–120m") return m > 90 && m <= 120;
+    if (bucketName === "120m") return m > 120;
+    return false;
+  };
+  const ticketMatchesResBucket = (t, bucketName) => {
+    if (!bucketName) return true;
+    if (bucketName === "Unresolved") return t.status !== "Done";
+    if (t.resHrs == null) return false;
+    const h = t.resHrs;
+    if (bucketName === "0–4 hr") return h <= 4;
+    if (bucketName === "4–12 hr") return h > 4 && h <= 12;
+    if (bucketName === "12–24 hr") return h > 12 && h <= 24;
+    if (bucketName === "24–48 hr") return h > 24 && h <= 48;
+    if (bucketName === "48–72 hr") return h > 48 && h <= 72;
+    if (bucketName === "72 hr") return h > 72;
+    return false;
+  };
+
+  // All Tickets list: dropdown takes precedence when set; otherwise use click filter (from chart); click filters have no UI
+  const effectiveStatus = filterStatus || filterStatusClick;
+  const effectiveAssignee = filterAssignee || filterAssigneeClick;
+  const effectiveCategory = filterCategory || filterCategoryClick;
+  const effectiveLabel = filterLabel || filterLabelClick;
+  const effectiveReporter = filterReporter || filterReporterClick;
+  const effectiveNoResponse = filterNoResponse || filterNoResponseClick;
+
   const filteredTickets = allTickets.filter(t => {
-    if (filterStatus) {
-      if (filterStatus === OPEN_STATUS_VALUE) { if (t.status === "Done") return false; }
-      else if (t.status !== filterStatus) return false;
+    if (effectiveStatus) {
+      if (effectiveStatus === OPEN_STATUS_VALUE) { if (t.status === "Done") return false; }
+      else if (t.status !== effectiveStatus) return false;
     }
-    if (filterAssignee && t.assignee !== filterAssignee) return false;
-    if (filterCategory && t.category !== filterCategory) return false;
-    if (filterLabel) {
+    if (effectiveAssignee && t.assignee !== effectiveAssignee) return false;
+    if (effectiveCategory && t.category !== effectiveCategory) return false;
+    if (effectiveLabel) {
       const labels = t.labels || [];
-      if (filterLabel === "Unlabeled") { if (labels.length > 0) return false; }
-      else if (!labels.includes(filterLabel)) return false;
+      if (effectiveLabel === "Unlabeled") { if (labels.length > 0) return false; }
+      else if (!labels.includes(effectiveLabel)) return false;
     }
-    if (filterReporter && (t.reporter || "Unknown") !== filterReporter) return false;
-    if (filterNoResponse === "noResponse" && t.frMins != null) return false;
-    if (filterNoResponse === "hasResponse" && t.frMins == null) return false;
+    if (effectiveReporter && (t.reporter || "Unknown") !== effectiveReporter) return false;
+    if (effectiveNoResponse === "noResponse" && t.frMins != null) return false;
+    if (effectiveNoResponse === "hasResponse" && t.frMins == null) return false;
+    if (!ticketMatchesFrBucket(t, filterFrBucket)) return false;
+    if (!ticketMatchesResBucket(t, filterResBucket)) return false;
     return true;
   });
 
@@ -474,12 +543,12 @@ export default function HLPDashboard() {
   const bucket120F = frTimesFiltered.filter(m => m > 90 && m <= 120).length;
   const bucket120plusF = frTimesFiltered.filter(m => m > 120).length;
   const frBucketsFiltered = [
-    { name: "≤30m", value: bucket30F, color: "#22c55e" },
-    { name: "31-60m", value: bucket60F, color: "#f59e0b" },
-    { name: "61-90m", value: bucket90F, color: "#f97316" },
-    { name: "91-120m", value: bucket120F, color: "#ef4444" },
-    { name: "120m+", value: bucket120plusF, color: "#dc2626" },
-    { name: "No Resp", value: noRespFiltered, color: "#64748b" },
+    { name: "0–30m", value: bucket30F, color: "#22c55e" },
+    { name: "30–60m", value: bucket60F, color: "#f59e0b" },
+    { name: "60–90m", value: bucket90F, color: "#f97316" },
+    { name: "90–120m", value: bucket120F, color: "#ef4444" },
+    { name: "120m", value: bucket120plusF, color: "#dc2626" },
+    { name: "No Response", value: noRespFiltered, color: "#64748b" },
   ].filter(b => b.value > 0);
   const frStatsFiltered = {
     within30: bucket30F,
@@ -512,30 +581,16 @@ export default function HLPDashboard() {
   // Resolution data from filtered tickets (for Resolution Analysis tab)
   const resTimesFiltered = ticketsForOverview.filter(t => t.resHrs != null).map(t => t.resHrs);
   const resolvedFiltered = ticketsForOverview.filter(t => t.status === "Done").length;
+  const unresolvedFiltered = ticketsForOverview.length - resolvedFiltered;
   const resBucketsFiltered = [
-    { name: "≤4 hr", value: resTimesFiltered.filter(h => h <= 4).length, color: "#22c55e" },
-    { name: "4hr-8hr", value: resTimesFiltered.filter(h => h > 4 && h <= 8).length, color: "#4ade80" },
-    { name: "8hr-12hr", value: resTimesFiltered.filter(h => h > 8 && h <= 12).length, color: "#a3e635" },
-    { name: "12hr-24hr", value: resTimesFiltered.filter(h => h > 12 && h <= 24).length, color: "#facc15" },
-    { name: "24hr-48hr", value: resTimesFiltered.filter(h => h > 24 && h <= 48).length, color: "#f59e0b" },
-    { name: "48hr-72hr", value: resTimesFiltered.filter(h => h > 48 && h <= 72).length, color: "#f97316" },
-    { name: "72hr+", value: resTimesFiltered.filter(h => h > 72).length, color: "#ef4444" },
+    { name: "0–4 hr", value: resTimesFiltered.filter(h => h <= 4).length, color: "#22c55e" },
+    { name: "4–12 hr", value: resTimesFiltered.filter(h => h > 4 && h <= 12).length, color: "#4ade80" },
+    { name: "12–24 hr", value: resTimesFiltered.filter(h => h > 12 && h <= 24).length, color: "#a3e635" },
+    { name: "24–48 hr", value: resTimesFiltered.filter(h => h > 24 && h <= 48).length, color: "#facc15" },
+    { name: "48–72 hr", value: resTimesFiltered.filter(h => h > 48 && h <= 72).length, color: "#f59e0b" },
+    { name: "72 hr", value: resTimesFiltered.filter(h => h > 72).length, color: "#f97316" },
+    { name: "Unresolved", value: unresolvedFiltered, color: "#64748b" },
   ].filter(b => b.value > 0);
-  const assigneeMapRes = {};
-  ticketsForOverview.forEach(t => {
-    const a = t.assignee || "Unassigned";
-    if (!assigneeMapRes[a]) assigneeMapRes[a] = [];
-    if (t.resHrs != null) assigneeMapRes[a].push(t.resHrs);
-  });
-  const assigneeResFiltered = Object.entries(assigneeMapRes)
-    .filter(([, list]) => list.length > 0)
-    .map(([name, list]) => ({
-      name: name.length > 15 ? name.substring(0, 13) + ".." : name,
-      fullName: name,
-      avg: Math.round(list.reduce((s, v) => s + v, 0) / list.length * 10) / 10,
-    }))
-    .sort((a, b) => b.avg - a.avg);
-
   // Grouped bar: FR by assignee × category or label
   const labelColorsMap = { BUG: "#ef4444", Not_A_BUG: "#06b6d4", Request: "#6366f1", Unidentifed: "#f97316", Unlabeled: "#94a3b8" };
   function buildFrGroupedData(mode) {
@@ -621,22 +676,28 @@ export default function HLPDashboard() {
     : [...new Set(ticketsForOverview.map(t => (t.labels && t.labels[0]) || "Unlabeled"))];
 
   const goToAllTickets = (filters = {}) => {
-    // Merge passed filters with current filter state so Category, Label, Reporter, Assignee, Status, No response are always preserved unless overridden
     const current = filtersRef.current;
-    const merged = {
-      status: filters.status !== undefined ? filters.status : current.status,
-      assignee: filters.assignee !== undefined ? filters.assignee : current.assignee,
-      category: filters.category !== undefined ? filters.category : current.category,
-      label: filters.label !== undefined ? filters.label : current.label,
-      reporter: filters.reporter !== undefined ? filters.reporter : current.reporter,
-      noResponse: filters.noResponse !== undefined ? filters.noResponse : current.noResponse,
-    };
-    setFilterStatus(merged.status);
-    setFilterAssignee(merged.assignee);
-    setFilterCategory(merged.category);
-    setFilterLabel(merged.label);
-    setFilterReporter(merged.reporter);
-    setFilterNoResponse(merged.noResponse);
+    const clearAll = Object.keys(filters).length === 0;
+
+    // Visible dropdowns: only clear when goToAllTickets() with no args; never set from chart click
+    if (clearAll) {
+      setFilterStatus("");
+      setFilterAssignee("");
+      setFilterCategory("");
+      setFilterLabel("");
+      setFilterReporter("");
+      setFilterNoResponse("");
+    }
+
+    // Click-only filters: set from filters when provided; clear when goToAllTickets() with no args
+    setFilterStatusClick(filters.status !== undefined ? filters.status : (clearAll ? "" : current.statusClick));
+    setFilterAssigneeClick(filters.assignee !== undefined ? filters.assignee : (clearAll ? "" : current.assigneeClick));
+    setFilterCategoryClick(filters.category !== undefined ? filters.category : (clearAll ? "" : current.categoryClick));
+    setFilterLabelClick(filters.label !== undefined ? filters.label : (clearAll ? "" : current.labelClick));
+    setFilterReporterClick(filters.reporter !== undefined ? filters.reporter : (clearAll ? "" : current.reporterClick));
+    setFilterNoResponseClick(filters.noResponse !== undefined ? filters.noResponse : (clearAll ? "" : current.noResponseClick));
+    setFilterFrBucket(filters.frBucket !== undefined ? filters.frBucket : (clearAll ? "" : current.frBucket));
+    setFilterResBucket(filters.resBucket !== undefined ? filters.resBucket : (clearAll ? "" : current.resBucket));
     setTab("All Tickets");
   };
 
@@ -679,7 +740,7 @@ export default function HLPDashboard() {
                 {["Overview", "FR Analysis", "Resolution Analysis", "All Tickets"].map(t => (
                   <button
                     key={t}
-                    onClick={() => setTab(t)}
+                    onClick={() => switchTab(t)}
                     style={{
                       padding: "8px 18px",
                       borderRadius: 8,
@@ -796,7 +857,7 @@ export default function HLPDashboard() {
                     { label: "Total Tickets", value: overviewStats.total, sub: "", accent: "#6366f1", onClick: () => goToAllTickets() },
                     { label: "Resolved", value: overviewStats.resolved, sub: `${overviewStats.total > 0 ? Math.round(overviewStats.resolved / overviewStats.total * 100) : 0}%`, accent: "#22c55e", onClick: () => goToAllTickets({ status: "Done" }) },
                     { label: "Open", value: overviewStats.open, sub: `${overviewStats.total > 0 ? Math.round(overviewStats.open / overviewStats.total * 100) : 0}%`, accent: "#ef4444", onClick: () => goToAllTickets({ status: OPEN_STATUS_VALUE }) },
-                    { label: "FR SLA Pass", value: `${overviewStats.passRate}%`, sub: `${overviewStats.within30}/${overviewStats.total} ≤30m`, accent: overviewStats.passRate >= 70 ? "#22c55e" : "#ef4444", onClick: () => goToAllTickets() },
+                    { label: "FR SLA Pass", value: `${overviewStats.passRate}%`, sub: `${overviewStats.within30}/${overviewStats.total} 0–30m`, accent: overviewStats.passRate >= 70 ? "#22c55e" : "#ef4444", onClick: () => goToAllTickets() },
                     { label: "Avg Resolution time", value: overviewStats.avgRes ? (overviewStats.avgRes < 24 ? `${overviewStats.avgRes.toFixed(1)}h` : `${(overviewStats.avgRes / 24).toFixed(1)}d`) : "—", sub: `created → marked Done`, accent: "#22c55e", onClick: () => goToAllTickets() },
                   ].map((kpi, i) => (
                     <div key={i} role="button" tabIndex={0} onClick={kpi.onClick} onKeyDown={e => e.key === "Enter" && kpi.onClick()} style={{ background: "#1e293b", borderRadius: 12, padding: "16px 18px", border: "1px solid #334155", position: "relative", overflow: "hidden", cursor: "pointer" }} title="View in All Tickets">
@@ -972,13 +1033,13 @@ export default function HLPDashboard() {
                     <h3 style={{ margin: "0 0 14px 0", fontSize: 14, fontWeight: 700, color: "#cbd5e1" }}>First Response Distribution</h3>
                     <div style={{ display: "flex", alignItems: "center" }}>
                       <ResponsiveContainer width="55%" height={220}>
-                        <PieChart style={{ cursor: "pointer" }}><Pie data={frBucketsFiltered} cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={3} dataKey="value" stroke="none" onClick={() => goToAllTickets()}>
+                        <PieChart style={{ cursor: "pointer" }}><Pie data={frBucketsFiltered} cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={3} dataKey="value" stroke="none" onClick={(data) => goToAllTickets(data?.name != null ? { frBucket: data.name, resBucket: "" } : {})}>
                           {frBucketsFiltered.map((e, i) => <Cell key={i} fill={e.color} />)}
                         </Pie></PieChart>
                       </ResponsiveContainer>
                       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                         {frBucketsFiltered.map((b, i) => (
-                          <div key={i} role="button" tabIndex={0} onClick={() => goToAllTickets()} onKeyDown={e => e.key === "Enter" && goToAllTickets()} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }} title="View in All Tickets">
+                          <div key={i} role="button" tabIndex={0} onClick={() => goToAllTickets({ frBucket: b.name, resBucket: "" })} onKeyDown={e => e.key === "Enter" && goToAllTickets({ frBucket: b.name, resBucket: "" })} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }} title={`View tickets: ${b.name}`}>
                             <div style={{ width: 12, height: 12, borderRadius: 3, background: b.color, flexShrink: 0 }} />
                             <span style={{ color: "#94a3b8" }}>{b.name}</span>
                             <span style={{ color: "#e2e8f0", fontWeight: 700, marginLeft: "auto" }}>{b.value}</span>
@@ -1008,22 +1069,6 @@ export default function HLPDashboard() {
                       </div>
                     </div>
                   </div>
-                </div>
-
-                {/* FR Stats Cards */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-                  {[
-                    { label: "≤30 min (SLA Pass)", value: frStatsFiltered.within30, color: "#22c55e", total: frStatsFiltered.totalFR },
-                    { label: "31-60 min", value: frBucketsFiltered.find(b => b.name === "31-60m")?.value || 0, color: "#f59e0b", total: frStatsFiltered.totalFR },
-                    { label: "61-120 min", value: (frBucketsFiltered.find(b => b.name === "61-90m")?.value || 0) + (frBucketsFiltered.find(b => b.name === "91-120m")?.value || 0), color: "#f97316", total: frStatsFiltered.totalFR },
-                    { label: "No Response", value: frStatsFiltered.noResp, color: "#ef4444", total: frStatsFiltered.total },
-                  ].map((card, i) => (
-                    <div key={i} style={{ background: "#1e293b", borderRadius: 12, padding: 16, border: "1px solid #334155", textAlign: "center" }}>
-                      <div style={{ fontSize: 32, fontWeight: 800, color: card.color }}>{card.value}</div>
-                      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>{card.label}</div>
-                      <div style={{ fontSize: 11, color: "#64748b" }}>{card.total > 0 ? Math.round(card.value / card.total * 100) : 0}% of {card.total}</div>
-                    </div>
-                  ))}
                 </div>
               </>
             )}
@@ -1082,13 +1127,13 @@ export default function HLPDashboard() {
                     <h3 style={{ margin: "0 0 14px 0", fontSize: 14, fontWeight: 700, color: "#cbd5e1" }}>Resolution Time Distribution</h3>
                     <div style={{ display: "flex", alignItems: "center" }}>
                       <ResponsiveContainer width="55%" height={220}>
-                        <PieChart style={{ cursor: "pointer" }}><Pie data={resBucketsFiltered} cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={3} dataKey="value" stroke="none" onClick={() => goToAllTickets()}>
+                        <PieChart style={{ cursor: "pointer" }}><Pie data={resBucketsFiltered} cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={3} dataKey="value" stroke="none" onClick={(data) => goToAllTickets(data?.name != null ? { resBucket: data.name, frBucket: "" } : {})}>
                           {resBucketsFiltered.map((e, i) => <Cell key={i} fill={e.color} />)}
                         </Pie></PieChart>
                       </ResponsiveContainer>
                       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                         {resBucketsFiltered.map((b, i) => (
-                          <div key={i} role="button" tabIndex={0} onClick={() => goToAllTickets()} onKeyDown={e => e.key === "Enter" && goToAllTickets()} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }} title="View in All Tickets">
+                          <div key={i} role="button" tabIndex={0} onClick={() => goToAllTickets({ resBucket: b.name, frBucket: "" })} onKeyDown={e => e.key === "Enter" && goToAllTickets({ resBucket: b.name, frBucket: "" })} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }} title={`View tickets: ${b.name}`}>
                             <div style={{ width: 12, height: 12, borderRadius: 3, background: b.color, flexShrink: 0 }} />
                             <span style={{ color: "#94a3b8" }}>{b.name}</span>
                             <span style={{ color: "#e2e8f0", fontWeight: 700, marginLeft: "auto" }}>{b.value}</span>
@@ -1116,37 +1161,6 @@ export default function HLPDashboard() {
                       </div>
                     </div>
                   </div>
-                </div>
-
-                <div style={{ background: "#1e293b", borderRadius: 14, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
-                  <h3 style={{ margin: "0 0 14px 0", fontSize: 14, fontWeight: 700, color: "#cbd5e1" }}>Avg Resolution by Assignee (hours)</h3>
-                  <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={assigneeResFiltered} barSize={28} style={{ cursor: "pointer" }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-                      <XAxis dataKey="name" tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Bar dataKey="avg" fill="#22c55e" radius={[6, 6, 0, 0]} name="Avg Resolution (h)" onClick={(data) => goToAllTickets({ assignee: data.fullName || data.name })} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: 12 }}>
-                  {[
-                    { label: "≤4 hr", name: "≤4 hr", color: "#22c55e" },
-                    { label: "4hr-8hr", name: "4hr-8hr", color: "#4ade80" },
-                    { label: "8hr-12hr", name: "8hr-12hr", color: "#a3e635" },
-                    { label: "12hr-24hr", name: "12hr-24hr", color: "#facc15" },
-                    { label: "24hr-48hr", name: "24hr-48hr", color: "#f59e0b" },
-                    { label: "48hr-72hr", name: "48hr-72hr", color: "#f97316" },
-                    { label: "72hr+", name: "72hr+", color: "#ef4444" },
-                  ].map((card, i) => (
-                    <div key={i} style={{ background: "#1e293b", borderRadius: 12, padding: 16, border: "1px solid #334155", textAlign: "center" }}>
-                      <div style={{ fontSize: 32, fontWeight: 800, color: card.color }}>{resBucketsFiltered.find(b => b.name === card.name)?.value || 0}</div>
-                      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>{card.label}</div>
-                      <div style={{ fontSize: 11, color: "#64748b" }}>{resolvedFiltered > 0 ? Math.round((resBucketsFiltered.find(b => b.name === card.name)?.value || 0) / resolvedFiltered * 100) : 0}% of {resolvedFiltered} resolved</div>
-                    </div>
-                  ))}
                 </div>
               </>
             )}
@@ -1246,7 +1260,7 @@ export default function HLPDashboard() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, fontSize: 13, color: overviewStats.passRate >= 70 ? "#bbf7d0" : "#fecaca", lineHeight: 1.6 }}>
                 <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: 14 }}>
                   <strong style={{ color: "#fff" }}>FR SLA: {overviewStats.passRate}% pass rate</strong><br />
-                  {overviewStats.within30} of {overviewStats.total} responded within 30m. {overviewStats.noResp} tickets have no response.
+                  {overviewStats.within30} of {overviewStats.total} responded within 0–30m. {overviewStats.noResp} tickets have no response.
                 </div>
                 <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: 14 }}>
                   <strong style={{ color: "#fff" }}>Avg Resolution time: {overviewStats.avgRes ? (overviewStats.avgRes < 24 ? `${overviewStats.avgRes.toFixed(1)}h` : `${(overviewStats.avgRes / 24).toFixed(1)}d`) : "—"}</strong><br />

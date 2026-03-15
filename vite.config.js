@@ -35,39 +35,35 @@ function jiraProxyPlugin() {
             }
             const jql = `project = HLP AND created >= "${startDate}" AND created <= "${endDate}" ORDER BY created ASC`;
             const auth = Buffer.from(`${email}:${token}`).toString("base64");
-            const jiraRes = await fetch(`${JIRA_API_BASE}/search/jql`, {
-              method: "POST",
-              headers: {
-                Authorization: `Basic ${auth}`,
-                Accept: "application/json",
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                jql,
-                maxResults: 100,
-                fields: [
-                  "summary",
-                  "status",
-                  "assignee",
-                  "reporter",
-                  "creator",
-                  "labels",
-                  "comment",
-                  "created",
-                  "resolutiondate",
-                  "updated",
-                  "customfield_10117",
-                ],
-              }),
-            });
-            if (!jiraRes.ok) {
-              const err = await jiraRes.text();
-              res.statusCode = jiraRes.status;
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify({ error: `Jira API: ${err || jiraRes.statusText}` }));
-              return;
-            }
-            const json = await jiraRes.json();
+            const PAGE_SIZE = 100;
+            const FIELDS = ["summary", "status", "assignee", "reporter", "creator", "labels", "comment", "created", "resolutiondate", "updated", "customfield_10117"];
+            let allRawIssues = [];
+            let nextPageToken = null;
+            do {
+              const body = { jql, maxResults: PAGE_SIZE, fields: FIELDS };
+              if (nextPageToken) body.nextPageToken = nextPageToken;
+              const jiraRes = await fetch(`${JIRA_API_BASE}/search/jql`, {
+                method: "POST",
+                headers: {
+                  Authorization: `Basic ${auth}`,
+                  Accept: "application/json",
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify(body),
+              });
+              if (!jiraRes.ok) {
+                const err = await jiraRes.text();
+                res.statusCode = jiraRes.status;
+                res.setHeader("Content-Type", "application/json");
+                res.end(JSON.stringify({ error: `Jira API: ${err || jiraRes.statusText}` }));
+                return;
+              }
+              const pageJson = await jiraRes.json();
+              const issues = pageJson.issues || [];
+              allRawIssues = allRawIssues.concat(issues);
+              nextPageToken = pageJson.isLast ? null : (pageJson.nextPageToken || null);
+            } while (nextPageToken);
+            const json = { issues: allRawIssues, total: allRawIssues.length };
 
             // First response = chronologically first comment by anyone except bots/automation.
             // - Exclude comments at ticket creation (within 2 min) — description/auto-created.

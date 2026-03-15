@@ -68,44 +68,58 @@ export default async function handler(req, res) {
 
     const jql = `project = HLP AND created >= "${startDate}" AND created <= "${endDate}" ORDER BY created ASC`;
     const auth = Buffer.from(`${email}:${token}`).toString("base64");
+    const FIELDS = [
+      "summary",
+      "status",
+      "assignee",
+      "reporter",
+      "creator",
+      "labels",
+      "comment",
+      "created",
+      "resolutiondate",
+      "updated",
+      "customfield_10117",
+    ];
+    const PAGE_SIZE = 100;
 
-    const jiraRes = await fetch(`${JIRA_API_BASE}/search/jql`, {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${auth}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    // Paginate using /rest/api/3/search/jql (nextPageToken; legacy /search was removed)
+    let allIssues = [];
+    let nextPageToken = null;
+
+    do {
+      const body = {
         jql,
-        maxResults: 100,
-        fields: [
-          "summary",
-          "status",
-          "assignee",
-          "reporter",
-          "creator",
-          "labels",
-          "comment",
-          "created",
-          "resolutiondate",
-          "updated",
-          "customfield_10117",
-        ],
-      }),
-    });
+        maxResults: PAGE_SIZE,
+        fields: FIELDS,
+      };
+      if (nextPageToken) body.nextPageToken = nextPageToken;
 
-    if (!jiraRes.ok) {
-      const errText = await jiraRes.text();
-      res
-        .status(jiraRes.status)
-        .json({ error: `Jira API: ${errText || jiraRes.statusText}` });
-      return;
-    }
+      const jiraRes = await fetch(`${JIRA_API_BASE}/search/jql`, {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
 
-    const json = await jiraRes.json();
-    const total = json.total ?? (json.issues || []).length ?? 0;
-    // Log so you can see in Vercel Dashboard > Logs what Jira returned
+      if (!jiraRes.ok) {
+        const errText = await jiraRes.text();
+        res
+          .status(jiraRes.status)
+          .json({ error: `Jira API: ${errText || jiraRes.statusText}` });
+        return;
+      }
+
+      const json = await jiraRes.json();
+      const issues = json.issues || [];
+      allIssues = allIssues.concat(issues);
+      nextPageToken = json.isLast ? null : (json.nextPageToken || null);
+    } while (nextPageToken);
+
+    const total = allIssues.length;
     console.log("[jira-search]", { startDate, endDate, total, jql });
 
     // Optional lightweight debug: /api/jira-search?...&meta=1
@@ -122,7 +136,7 @@ export default async function handler(req, res) {
 
     res.setHeader("X-Jira-Total", String(total));
 
-    const issues = (json.issues || []).map((issue) => {
+    const issues = allIssues.map((issue) => {
       const f = issue.fields || {};
       const created = f.created || null;
       const comments = f.comment?.comments || [];
