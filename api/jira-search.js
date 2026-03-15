@@ -45,6 +45,9 @@ export default async function handler(req, res) {
   try {
     const { startDate, endDate } = req.query || {};
 
+    // Avoid Vercel/edge caches so Jira results are always fresh
+    res.setHeader("Cache-Control", "no-store, max-age=0");
+
     const email = process.env.JIRA_EMAIL || process.env.VITE_JIRA_EMAIL;
     const token = process.env.JIRA_API_TOKEN || process.env.VITE_JIRA_API_TOKEN;
 
@@ -81,6 +84,7 @@ export default async function handler(req, res) {
           "status",
           "assignee",
           "reporter",
+          "creator",
           "labels",
           "comment",
           "created",
@@ -100,11 +104,29 @@ export default async function handler(req, res) {
     }
 
     const json = await jiraRes.json();
+
+    // Optional lightweight debug: /api/jira-search?...&meta=1
+    if (req.query?.meta === "1") {
+      res.status(200).json({
+        total: json.total ?? (json.issues || []).length ?? 0,
+        warning:
+          "meta=1 is for debugging only; remove this query param for full issue payload.",
+      });
+      return;
+    }
+
     const issues = (json.issues || []).map((issue) => {
       const f = issue.fields || {};
       const created = f.created || null;
       const comments = f.comment?.comments || [];
-      const reporterName = f.reporter?.displayName || null;
+      const reporterName =
+        f.reporter?.displayName ||
+        f.reporter?.name ||
+        f.reporter?.emailAddress ||
+        f.creator?.displayName ||
+        f.creator?.name ||
+        f.creator?.emailAddress ||
+        null;
       const firstResponseDate = getFirstResponseDate(
         comments,
         reporterName,
@@ -121,6 +143,12 @@ export default async function handler(req, res) {
         summary: f.summary || "",
         status: statusName,
         assignee: f.assignee?.displayName || "Unassigned",
+        // Use human-friendly reporter/creator name when available; otherwise fall back to accountId
+        reporter:
+          reporterName ||
+          f.reporter?.accountId ||
+          f.creator?.accountId ||
+          "Unknown",
         labels: f.labels || [],
         category: f.customfield_10117?.value ?? f.customfield_10117 ?? "Unknown",
         created,

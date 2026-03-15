@@ -45,7 +45,19 @@ function jiraProxyPlugin() {
               body: JSON.stringify({
                 jql,
                 maxResults: 100,
-                fields: ["summary", "status", "assignee", "reporter", "labels", "comment", "created", "resolutiondate", "updated", "customfield_10117"],
+                fields: [
+                  "summary",
+                  "status",
+                  "assignee",
+                  "reporter",
+                  "creator",
+                  "labels",
+                  "comment",
+                  "created",
+                  "resolutiondate",
+                  "updated",
+                  "customfield_10117",
+                ],
               }),
             });
             if (!jiraRes.ok) {
@@ -97,8 +109,29 @@ function jiraProxyPlugin() {
               const f = issue.fields || {};
               const created = f.created || null;
               const comments = f.comment?.comments || [];
-              const reporterName = f.reporter?.displayName || null;
-              const firstResponseDate = getFirstResponseDate(comments, reporterName, created);
+
+              // Prefer human-friendly reporter/creator identifiers
+              const reporterDisplayKey =
+                f.reporter?.displayName ||
+                f.reporter?.name ||
+                f.reporter?.emailAddress ||
+                f.creator?.displayName ||
+                f.creator?.name ||
+                f.creator?.emailAddress ||
+                null;
+
+              // What we show in charts / UI (fall back to accountId if names are hidden)
+              const reporterForGrouping =
+                reporterDisplayKey ||
+                f.reporter?.accountId ||
+                f.creator?.accountId ||
+                "Unknown";
+
+              const firstResponseDate = getFirstResponseDate(
+                comments,
+                reporterDisplayKey,
+                created
+              );
               const doneAtFromHistory = getDoneAtFromChangelog(issue.changelog);
               const statusName = f.status?.name || "Unknown";
               const isDone = statusName.toLowerCase() === "done";
@@ -110,6 +143,7 @@ function jiraProxyPlugin() {
                 summary: f.summary || "",
                 status: statusName,
                 assignee: f.assignee?.displayName || "Unassigned",
+                reporter: reporterForGrouping,
                 labels: f.labels || [],
                 category: f.customfield_10117?.value ?? f.customfield_10117 ?? "Unknown",
                 created,
@@ -118,7 +152,7 @@ function jiraProxyPlugin() {
                 firstTeamCommentDate: firstResponseDate,
                 _needsChangelog: isDone && !statuscategorychangedate,
                 _needsComments: !firstResponseDate,
-                _reporter: reporterName,
+                _reporter: reporterDisplayKey,
                 _created: created,
               };
             });
