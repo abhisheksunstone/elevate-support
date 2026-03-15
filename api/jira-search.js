@@ -45,8 +45,10 @@ export default async function handler(req, res) {
   try {
     const { startDate, endDate } = req.query || {};
 
-    // Avoid Vercel/edge caches so Jira results are always fresh
-    res.setHeader("Cache-Control", "no-store, max-age=0");
+    // Avoid Vercel/edge and browser caches so Jira results are always fresh (no 304)
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
 
     const email = process.env.JIRA_EMAIL || process.env.VITE_JIRA_EMAIL;
     const token = process.env.JIRA_API_TOKEN || process.env.VITE_JIRA_API_TOKEN;
@@ -114,6 +116,9 @@ export default async function handler(req, res) {
       });
       return;
     }
+
+    const rawTotal = json.total ?? (json.issues || []).length;
+    res.setHeader("X-Jira-Total", String(rawTotal));
 
     const issues = (json.issues || []).map((issue) => {
       const f = issue.fields || {};

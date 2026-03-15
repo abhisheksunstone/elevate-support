@@ -131,9 +131,9 @@ const CustomTooltip = ({ active, payload, label, filterZeros, valueFormat }) => 
 
 // ——— Jira via dev-server proxy (avoids CORS; credentials stay server-side) ———
 async function fetchJiraViaProxy(startDate, endDate) {
-  // _ts query param busts any edge caching so we always see fresh Jira data
+  // _ts + cache: 'no-store' prevent 304 (no body) so we always get fresh JSON
   const url = `/api/jira-search?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}&_ts=${Date.now()}`;
-  const response = await fetch(url);
+  const response = await fetch(url, { cache: "no-store" });
   const data = await response.json();
   if (!response.ok) throw new Error(data?.error || `Request failed ${response.status}`);
   return Array.isArray(data) ? data : [];
