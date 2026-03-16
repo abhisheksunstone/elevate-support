@@ -66,7 +66,31 @@ export default async function handler(req, res) {
       return;
     }
 
-    const jql = `project = HLP AND created >= "${startDate}" AND created <= "${endDate}" ORDER BY created ASC`;
+    // Interpret the date picker values as local dates (e.g. Asia/Kolkata),
+    // convert them to UTC wall-clock times, then use those in JQL so that
+    // "TO = 16" really means "up to the end of 16th in my timezone".
+    const localDateToUtcJira = (dateStr, plusDays = 0) => {
+      const d = new Date(`${dateStr}T00:00:00`);
+      if (Number.isNaN(d.getTime())) return null;
+      d.setDate(d.getDate() + plusDays);
+      // We want the *UTC* calendar date/time string Jira expects: "YYYY-MM-DD HH:MM"
+      const year = d.getUTCFullYear();
+      const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const day = String(d.getUTCDate()).padStart(2, "0");
+      const hours = String(d.getUTCHours()).padStart(2, "0");
+      const minutes = String(d.getUTCMinutes()).padStart(2, "0");
+      return `${year}-${month}-${day} ${hours}:${minutes}`;
+    };
+
+    const startUtc = localDateToUtcJira(startDate, 0);
+    const endExclusiveUtc = localDateToUtcJira(endDate, 1); // next local day at 00:00 → UTC
+
+    if (!startUtc || !endExclusiveUtc) {
+      res.status(400).json({ error: "Invalid startDate or endDate" });
+      return;
+    }
+
+    const jql = `project = HLP AND created >= "${startUtc}" AND created < "${endExclusiveUtc}" ORDER BY created ASC`;
     const auth = Buffer.from(`${email}:${token}`).toString("base64");
     const FIELDS = [
       "summary",

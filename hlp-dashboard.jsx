@@ -49,6 +49,31 @@ function businessMinutesBetween(start, end) {
   return Math.max(0, Math.round(totalMs / 60000));
 }
 
+// Convert an ISO timestamp from Jira into a local-date key "YYYY-MM-DD"
+// so that daily bucketing matches the user's local timezone (same as Jira UI).
+function toLocalDateKey(isoString) {
+  if (!isoString) return null;
+  const d = new Date(isoString);
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return null;
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+// Shift an ISO date string (YYYY-MM-DD) forward by 1 day.
+// Used so that the UI "TO" date is inclusive for the whole day
+// while the API still uses an exclusive upper bound.
+function addOneDayISO(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  d.setDate(d.getDate() + 1);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 const statusColor = {
   "Done": "#22c55e", "Pending": "#f59e0b", "Awaiting Customer Input": "#8b5cf6",
   "Open": "#ef4444", "Work in progress": "#3b82f6", "Waiting on Tech": "#06b6d4",
@@ -176,7 +201,8 @@ const CustomTooltip = ({ active, payload, label, filterZeros, valueFormat }) => 
 // ——— Jira via dev-server proxy (avoids CORS; credentials stay server-side) ———
 async function fetchJiraViaProxy(startDate, endDate) {
   // _ts + cache: 'no-store' prevent 304 (no body) so we always get fresh JSON
-  const url = `/api/jira-search?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}&_ts=${Date.now()}`;
+  const apiEndDate = addOneDayISO(endDate);
+  const url = `/api/jira-search?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(apiEndDate)}&_ts=${Date.now()}`;
   const response = await fetch(url, { cache: "no-store" });
   const data = await response.json();
   if (!response.ok) throw new Error(data?.error || `Request failed ${response.status}`);
@@ -293,7 +319,7 @@ function processData(rawIssues) {
   // Daily volume
   const dailyMap = {};
   tickets.forEach(t => {
-    const d = t.created?.substring(0, 10);
+    const d = toLocalDateKey(t.created);
     if (d) dailyMap[d] = (dailyMap[d] || 0) + 1;
   });
   const dailyData = Object.entries(dailyMap).sort().map(([date, tickets]) => ({
@@ -548,7 +574,7 @@ export default function HLPDashboard() {
   const dailyOverviewData = (() => {
     const map = {};
     ticketsForOverview.forEach(t => {
-      const dStr = t.created?.substring(0, 10);
+      const dStr = toLocalDateKey(t.created);
       if (!dStr) return;
       map[dStr] = (map[dStr] || 0) + 1;
     });
