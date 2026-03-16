@@ -5,6 +5,50 @@ const JIRA_BASE = "https://sunstonedev.atlassian.net/browse/";
 const CLOUD_ID = "da340d2a-a707-4481-be7b-7bf60d05f7a3";
 const SLA_FR_MIN = 30;
 
+// Business hours config: Monday–Friday, 10:30–18:30 local time
+const BUSINESS_START_HOUR = 10;
+const BUSINESS_START_MINUTE = 30;
+const BUSINESS_END_HOUR = 18;
+const BUSINESS_END_MINUTE = 30;
+
+// Returns the number of minutes between start and end that fall within business
+// hours (Mon–Fri, 10:30–19:00). If end <= start, returns 0.
+function businessMinutesBetween(start, end) {
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  if (!(startDate instanceof Date) || !(endDate instanceof Date) || isNaN(startDate) || isNaN(endDate)) return 0;
+  if (endDate <= startDate) return 0;
+
+  let totalMs = 0;
+
+  // Work with a cursor that walks day by day
+  let current = new Date(startDate);
+
+  while (current < endDate) {
+    const dayOfWeek = current.getDay(); // 0=Sun, 6=Sat
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+      const dayStart = new Date(current);
+      dayStart.setHours(BUSINESS_START_HOUR, BUSINESS_START_MINUTE, 0, 0);
+
+      const dayEnd = new Date(current);
+      dayEnd.setHours(BUSINESS_END_HOUR, BUSINESS_END_MINUTE, 0, 0);
+
+      const windowStart = new Date(Math.max(dayStart.getTime(), startDate.getTime()));
+      const windowEnd = new Date(Math.min(dayEnd.getTime(), endDate.getTime()));
+
+      if (windowEnd > windowStart) {
+        totalMs += windowEnd.getTime() - windowStart.getTime();
+      }
+    }
+
+    // Move to next day at 00:00
+    current.setDate(current.getDate() + 1);
+    current.setHours(0, 0, 0, 0);
+  }
+
+  return Math.max(0, Math.round(totalMs / 60000));
+}
+
 const statusColor = {
   "Done": "#22c55e", "Pending": "#f59e0b", "Awaiting Customer Input": "#8b5cf6",
   "Open": "#ef4444", "Work in progress": "#3b82f6", "Waiting on Tech": "#06b6d4",
@@ -145,8 +189,7 @@ function processData(rawIssues) {
     if (issue.created && issue.firstTeamCommentDate) {
       const created = new Date(issue.created);
       const firstResp = new Date(issue.firstTeamCommentDate);
-      const diffMs = firstResp - created;
-      frMins = Math.max(0, Math.round(diffMs / 60000));
+      frMins = businessMinutesBetween(created, firstResp);
     }
 
     const doneAt = issue.status === "Done" ? (issue.statuscategorychangedate || issue.updated) : null;
@@ -154,7 +197,8 @@ function processData(rawIssues) {
     if (issue.status === "Done" && issue.created && doneAt) {
       const created = new Date(issue.created);
       const resolved = new Date(doneAt);
-      resHrs = Math.round((resolved - created) / 3600000 * 10) / 10;
+      const resMins = businessMinutesBetween(created, resolved);
+      resHrs = Math.round((resMins / 60) * 10) / 10;
     }
 
     return {
