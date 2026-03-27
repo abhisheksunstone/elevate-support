@@ -110,7 +110,7 @@ function FRBadge({ mins }) {
   if (mins === null) return <span style={{ color: "#ef4444", fontWeight: 700, fontSize: 12 }}>No response</span>;
   const pass = mins <= SLA_FR_MIN;
   let display;
-  if (mins < 1) display = "<1m";
+  if (mins < 1 && mins > 0) display = "1m";
   else if (mins < 60) display = `${Math.round(mins)}m`;
   else if (mins < 1440) display = `${(mins / 60).toFixed(1)}h`;
   else display = `${(mins / 1440).toFixed(1)}d`;
@@ -130,7 +130,7 @@ function ResolutionBadge({ resHrs, doneAt }) {
   if (resHrs === null) return <span style={{ color: "#64748b", fontWeight: 600, fontSize: 12 }}>—</span>;
   const mins = resHrs * 60;
   let display;
-  if (mins < 1) display = "<1m";
+  if (mins < 1 && mins > 0) display = "1m";
   else if (mins < 60) display = `${Math.round(mins)}m`;
   else if (mins < 1440) display = `${(mins / 60).toFixed(1)}h`;
   else display = `${(mins / 1440).toFixed(1)}d`;
@@ -145,7 +145,7 @@ function ResolutionBadge({ resHrs, doneAt }) {
 // Format duration for tooltips (same style as FRBadge / ResolutionBadge)
 function formatMinsForTooltip(mins) {
   if (mins == null) return "—";
-  if (mins < 1) return "<1m";
+  if (mins < 1 && mins > 0) return "1m";
   if (mins < 60) return `${Math.round(mins)}m`;
   if (mins < 1440) return `${(mins / 60).toFixed(1)}h`;
   return `${(mins / 1440).toFixed(1)}d`;

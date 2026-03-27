@@ -66,7 +66,6 @@ function jiraProxyPlugin() {
             const json = { issues: allRawIssues, total: allRawIssues.length };
 
             // First response = chronologically first comment by anyone except bots/automation.
-            // - Exclude comments at ticket creation (within 2 min) — description/auto-created.
             // - Exclude reporter only when their comment is near creation (within 2 hr) — so reporter's later reply as support still counts.
             function getFirstResponseDate(comments, reporterDisplayName, issueCreated) {
               if (!comments || comments.length === 0) return null;
@@ -79,7 +78,6 @@ function jiraProxyPlugin() {
                 if (!name) return false;
                 if (SYSTEM_AUTHOR_PATTERN.test(name)) return false;
                 const commentMs = new Date(c.created || 0).getTime();
-                if (ticketCreatedMs && commentMs - ticketCreatedMs < 2 * 60 * 1000) return false;
                 if (reporterKey && nameLower === reporterKey && ticketCreatedMs && commentMs - ticketCreatedMs < 30 * 60 * 1000) return false;
                 return true;
               });

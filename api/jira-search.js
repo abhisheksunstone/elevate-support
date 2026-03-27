@@ -21,10 +21,6 @@ function getFirstResponseDate(comments, reporterDisplayName, issueCreated) {
 
     const commentMs = new Date(c.created || 0).getTime();
 
-    // Exclude comments at ticket creation (within 2 min) — description/auto-created.
-    if (ticketCreatedMs && commentMs - ticketCreatedMs < 2 * 60 * 1000) {
-      return false;
-    }
     // Exclude reporter when their comment is near creation (within 30 min).
     if (
       reporterKey &&
