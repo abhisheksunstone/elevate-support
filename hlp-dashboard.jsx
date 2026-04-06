@@ -3,7 +3,7 @@ import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveCo
 
 const JIRA_BASE = "https://sunstonedev.atlassian.net/browse/";
 const CLOUD_ID = "da340d2a-a707-4481-be7b-7bf60d05f7a3";
-const SLA_FR_MIN = 30;
+const SLA_FR_LABEL = "same working day";
 
 // Business hours config: Monday–Friday, 10:30–18:30 local time
 const BUSINESS_START_HOUR = 10;
@@ -12,7 +12,7 @@ const BUSINESS_END_HOUR = 18;
 const BUSINESS_END_MINUTE = 30;
 
 // Returns the number of minutes between start and end that fall within business
-// hours (Mon–Fri, 10:30–19:00). If end <= start, returns 0.
+// hours (Mon–Fri, 10:30–18:30). If end <= start, returns 0.
 function businessMinutesBetween(start, end) {
   const startDate = new Date(start);
   const endDate = new Date(end);
@@ -47,6 +47,52 @@ function businessMinutesBetween(start, end) {
   }
 
   return Math.max(0, Math.round(totalMs / 60000));
+}
+
+function isBusinessDay(date) {
+  const day = date.getDay();
+  return day !== 0 && day !== 6;
+}
+
+function startOfBusinessWindow(date) {
+  const d = new Date(date);
+  d.setHours(BUSINESS_START_HOUR, BUSINESS_START_MINUTE, 0, 0);
+  return d;
+}
+
+function endOfBusinessWindow(date) {
+  const d = new Date(date);
+  d.setHours(BUSINESS_END_HOUR, BUSINESS_END_MINUTE, 0, 0);
+  return d;
+}
+
+function nextBusinessDay(date) {
+  const d = new Date(date);
+  do {
+    d.setDate(d.getDate() + 1);
+  } while (!isBusinessDay(d));
+  return d;
+}
+
+function alignToBusinessTime(date) {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return null;
+  while (!isBusinessDay(d)) d.setDate(d.getDate() + 1);
+
+  const dayStart = startOfBusinessWindow(d);
+  const dayEnd = endOfBusinessWindow(d);
+  if (d < dayStart) return dayStart;
+  if (d >= dayEnd) return startOfBusinessWindow(nextBusinessDay(d));
+  return d;
+}
+
+// FR SLA deadline (Option C): end of the same working day window from aligned
+// created time (Mon–Fri 10:30–18:30). If created outside working hours/weekend,
+// deadline is end of the next applicable working day.
+function getFrSlaDeadline(createdAt) {
+  const aligned = alignToBusinessTime(createdAt);
+  if (!aligned) return null;
+  return endOfBusinessWindow(aligned);
 }
 
 // Convert an ISO timestamp from Jira into a local-date key "YYYY-MM-DD"
@@ -97,6 +143,12 @@ const categoryColor = {
 
 const REPORTER_PALETTE = ["#6366f1", "#22c55e", "#f97316", "#06b6d4", "#ec4899", "#eab308", "#0ea5e9", "#a855f7"];
 
+// Support levels (defined now; wiring into charts/filters can be added later)
+const SUPPORT_LEVELS = {
+  L1: ["niti", "gunjan", "vaishali"],
+  L2: ["sai", "isha", "akshay", "abhishek", "suchi"],
+};
+
 const JiraLink = ({ issueKey }) => (
   <a href={JIRA_BASE + issueKey} target="_blank" rel="noopener noreferrer"
     style={{ color: "#818cf8", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}
@@ -106,9 +158,8 @@ const JiraLink = ({ issueKey }) => (
   </a>
 );
 
-function FRBadge({ mins }) {
+function FRBadge({ mins, pass }) {
   if (mins === null) return <span style={{ color: "#ef4444", fontWeight: 700, fontSize: 12 }}>No response</span>;
-  const pass = mins <= SLA_FR_MIN;
   let display;
   if (mins < 1 && mins > 0) display = "1m";
   else if (mins < 60) display = `${Math.round(mins)}m`;
@@ -117,9 +168,8 @@ function FRBadge({ mins }) {
   return <span style={{ color: pass ? "#22c55e" : "#ef4444", fontWeight: 700, fontSize: 12 }}>{display}</span>;
 }
 
-function SLABadge({ mins }) {
+function SLABadge({ mins, pass }) {
   if (mins === null) return <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: "#64748b22", color: "#94a3b8", border: "1px solid #64748b44" }}>No resp</span>;
-  const pass = mins <= SLA_FR_MIN;
   return <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600,
     background: pass ? "#22c55e22" : "#ef444422", color: pass ? "#22c55e" : "#ef4444",
     border: `1px solid ${pass ? "#22c55e" : "#ef4444"}44` }}>{pass ? "Pass" : "Breach"}</span>;
@@ -212,10 +262,15 @@ async function fetchJiraViaProxy(startDate, endDate) {
 function processData(rawIssues) {
   const tickets = rawIssues.map(issue => {
     let frMins = null;
+    let frSlaPass = null;
+    let frBreachMins = null;
     if (issue.created && issue.firstTeamCommentDate) {
       const created = new Date(issue.created);
       const firstResp = new Date(issue.firstTeamCommentDate);
       frMins = businessMinutesBetween(created, firstResp);
+      const deadline = getFrSlaDeadline(created);
+      frSlaPass = !!deadline && firstResp <= deadline;
+      if (!frSlaPass && deadline) frBreachMins = businessMinutesBetween(deadline, firstResp);
     }
 
     const doneAt = issue.status === "Done" ? (issue.statuscategorychangedate || issue.updated) : null;
@@ -237,6 +292,8 @@ function processData(rawIssues) {
       category: issue.category || "Unknown",
       created: issue.created,
       frMins,
+      frSlaPass,
+      frBreachMins,
       resHrs,
       doneAt,
     };
@@ -285,18 +342,17 @@ function processData(rawIssues) {
   // FR buckets
   const frTimes = tickets.filter(t => t.frMins !== null).map(t => t.frMins);
   const noResp = tickets.filter(t => t.frMins === null).length;
-  const bucket30 = frTimes.filter(t => t <= 30).length;
-  const bucket60 = frTimes.filter(t => t > 30 && t <= 60).length;
-  const bucket90 = frTimes.filter(t => t > 60 && t <= 90).length;
-  const bucket120 = frTimes.filter(t => t > 90 && t <= 120).length;
-  const bucket120plus = frTimes.filter(t => t > 120).length;
+  const frPass = tickets.filter(t => t.frSlaPass === true).length;
+  const breachMins = tickets.filter(t => t.frBreachMins != null).map(t => t.frBreachMins);
+  const breach0to4h = breachMins.filter(m => m > 0 && m <= 240).length;
+  const breach4to8h = breachMins.filter(m => m > 240 && m <= 480).length;
+  const breach8hPlus = breachMins.filter(m => m > 480).length;
 
   const frBuckets = [
-    { name: "0–30m", value: bucket30, color: "#22c55e" },
-    { name: "30–60m", value: bucket60, color: "#f59e0b" },
-    { name: "60–90m", value: bucket90, color: "#f97316" },
-    { name: "90–120m", value: bucket120, color: "#ef4444" },
-    { name: "120m", value: bucket120plus, color: "#dc2626" },
+    { name: "Within SLA", value: frPass, color: "#22c55e" },
+    { name: "Breach 0–4h", value: breach0to4h, color: "#f59e0b" },
+    { name: "Breach 4–8h", value: breach4to8h, color: "#f97316" },
+    { name: "Breach 8h+", value: breach8hPlus, color: "#dc2626" },
     { name: "No Response", value: noResp, color: "#64748b" },
   ].filter(b => b.value > 0);
 
@@ -352,15 +408,15 @@ function processData(rawIssues) {
 
   // Summary stats
   const totalFR = frTimes.length;
-  const within30 = bucket30;
+  const withinSla = frPass;
   const medianFR = frTimes.length > 0 ? frTimes.sort((a, b) => a - b)[Math.floor(frTimes.length / 2)] : 0;
 
   return {
     tickets, statusData, labelData, categoryData, reporterData, frBuckets, assigneeData, dailyData, assigneeFR, resBuckets, assigneeRes,
     stats: {
       total: tickets.length, resolved, open: tickets.length - resolved,
-      medianFR, within30, totalFR, noResp, avgRes,
-      passRate: totalFR > 0 ? Math.round(within30 / totalFR * 100) : 0,
+      medianFR, withinSla, totalFR, noResp, avgRes,
+      passRate: tickets.length > 0 ? Math.round(withinSla / tickets.length * 100) : 0,
     }
   };
 }
@@ -461,13 +517,12 @@ export default function HLPDashboard() {
   const ticketMatchesFrBucket = (t, bucketName) => {
     if (!bucketName) return true;
     if (bucketName === "No Response") return t.frMins == null;
-    if (t.frMins == null) return false;
-    const m = t.frMins;
-    if (bucketName === "0–30m") return m <= 30;
-    if (bucketName === "30–60m") return m > 30 && m <= 60;
-    if (bucketName === "60–90m") return m > 60 && m <= 90;
-    if (bucketName === "90–120m") return m > 90 && m <= 120;
-    if (bucketName === "120m") return m > 120;
+    if (bucketName === "Within SLA") return t.frSlaPass === true;
+    if (t.frBreachMins == null) return false;
+    const m = t.frBreachMins;
+    if (bucketName === "Breach 0–4h") return m > 0 && m <= 240;
+    if (bucketName === "Breach 4–8h") return m > 240 && m <= 480;
+    if (bucketName === "Breach 8h+") return m > 480;
     return false;
   };
   const ticketMatchesResBucket = (t, bucketName) => {
@@ -607,26 +662,25 @@ export default function HLPDashboard() {
   // FR data from filtered tickets (for FR Analysis tab)
   const frTimesFiltered = ticketsForOverview.filter(t => t.frMins !== null).map(t => t.frMins);
   const noRespFiltered = ticketsForOverview.filter(t => t.frMins === null).length;
-  const bucket30F = frTimesFiltered.filter(m => m <= 30).length;
-  const bucket60F = frTimesFiltered.filter(m => m > 30 && m <= 60).length;
-  const bucket90F = frTimesFiltered.filter(m => m > 60 && m <= 90).length;
-  const bucket120F = frTimesFiltered.filter(m => m > 90 && m <= 120).length;
-  const bucket120plusF = frTimesFiltered.filter(m => m > 120).length;
+  const passFiltered = ticketsForOverview.filter(t => t.frSlaPass === true).length;
+  const breachMinsFiltered = ticketsForOverview.filter(t => t.frBreachMins != null).map(t => t.frBreachMins);
+  const breach0to4hF = breachMinsFiltered.filter(m => m > 0 && m <= 240).length;
+  const breach4to8hF = breachMinsFiltered.filter(m => m > 240 && m <= 480).length;
+  const breach8hPlusF = breachMinsFiltered.filter(m => m > 480).length;
   const frBucketsFiltered = [
-    { name: "0–30m", value: bucket30F, color: "#22c55e" },
-    { name: "30–60m", value: bucket60F, color: "#f59e0b" },
-    { name: "60–90m", value: bucket90F, color: "#f97316" },
-    { name: "90–120m", value: bucket120F, color: "#ef4444" },
-    { name: "120m", value: bucket120plusF, color: "#dc2626" },
+    { name: "Within SLA", value: passFiltered, color: "#22c55e" },
+    { name: "Breach 0–4h", value: breach0to4hF, color: "#f59e0b" },
+    { name: "Breach 4–8h", value: breach4to8hF, color: "#f97316" },
+    { name: "Breach 8h+", value: breach8hPlusF, color: "#dc2626" },
     { name: "No Response", value: noRespFiltered, color: "#64748b" },
   ].filter(b => b.value > 0);
   const frStatsFiltered = {
-    within30: bucket30F,
+    withinSla: passFiltered,
     totalFR: frTimesFiltered.length,
     noResp: noRespFiltered,
     total: ticketsForOverview.length,
-    // Pass rate = within30 / total tickets (no-response counts as failing SLA)
-    passRate: ticketsForOverview.length > 0 ? Math.round(bucket30F / ticketsForOverview.length * 100) : 0,
+    // Pass rate = within SLA / total tickets (no-response counts as failing SLA)
+    passRate: ticketsForOverview.length > 0 ? Math.round(passFiltered / ticketsForOverview.length * 100) : 0,
   };
 
   // Stats for filtered view (Overview KPIs + Key Metrics Summary when Category/Label filters apply)
@@ -640,7 +694,7 @@ export default function HLPDashboard() {
       total,
       resolved,
       open,
-      within30: frStatsFiltered.within30,
+      withinSla: frStatsFiltered.withinSla,
       totalFR: frStatsFiltered.totalFR,
       noResp: frStatsFiltered.noResp,
       passRate: frStatsFiltered.passRate,
@@ -927,10 +981,10 @@ export default function HLPDashboard() {
                     { label: "Total Tickets", value: overviewStats.total, sub: "", accent: "#6366f1", onClick: () => goToAllTickets() },
                     { label: "Resolved", value: overviewStats.resolved, sub: `${overviewStats.total > 0 ? Math.round(overviewStats.resolved / overviewStats.total * 100) : 0}%`, accent: "#22c55e", onClick: () => goToAllTickets({ status: "Done" }) },
                     { label: "Open", value: overviewStats.open, sub: `${overviewStats.total > 0 ? Math.round(overviewStats.open / overviewStats.total * 100) : 0}%`, accent: "#ef4444", onClick: () => goToAllTickets({ status: OPEN_STATUS_VALUE }) },
-                    { label: "FR SLA Pass", value: `${overviewStats.passRate}%`, sub: `${overviewStats.within30}/${overviewStats.total} 0–30m`, accent: overviewStats.passRate >= 70 ? "#22c55e" : "#ef4444", onClick: () => goToAllTickets() },
+                    { label: "FR SLA Pass", value: `${overviewStats.passRate}%`, sub: `${overviewStats.withinSla}/${overviewStats.total} ${SLA_FR_LABEL}`, accent: overviewStats.passRate >= 70 ? "#22c55e" : "#ef4444", onClick: () => goToAllTickets(), tooltip: "Mon–Fri, 10:30–18:30, weekends excluded" },
                     { label: "Avg Resolution time", value: overviewStats.avgRes ? (overviewStats.avgRes < 24 ? `${overviewStats.avgRes.toFixed(1)}h` : `${(overviewStats.avgRes / 24).toFixed(1)}d`) : "—", sub: `created → marked Done`, accent: "#22c55e", onClick: () => goToAllTickets() },
                   ].map((kpi, i) => (
-                    <div key={i} role="button" tabIndex={0} onClick={kpi.onClick} onKeyDown={e => e.key === "Enter" && kpi.onClick()} style={{ background: "#1e293b", borderRadius: 12, padding: "16px 18px", border: "1px solid #334155", position: "relative", overflow: "hidden", cursor: "pointer" }} title="View in All Tickets">
+                    <div key={i} role="button" tabIndex={0} onClick={kpi.onClick} onKeyDown={e => e.key === "Enter" && kpi.onClick()} style={{ background: "#1e293b", borderRadius: 12, padding: "16px 18px", border: "1px solid #334155", position: "relative", overflow: "hidden", cursor: "pointer" }} title={kpi.tooltip ? `${kpi.tooltip} · View in All Tickets` : "View in All Tickets"}>
                       <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: kpi.accent }} />
                       <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{kpi.label}</div>
                       <div style={{ fontSize: 28, fontWeight: 800, color: "#f8fafc", marginTop: 4 }}>{kpi.value}</div>
@@ -1005,7 +1059,7 @@ export default function HLPDashboard() {
                           </Pie>
                         </PieChart>
                       </ResponsiveContainer>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto", paddingRight: 4 }}>
                         {reporterOverviewData.map((r, i) => (
                           <div key={i} role="button" tabIndex={0} onClick={() => goToAllTickets({ reporter: r.name })} onKeyDown={e => e.key === "Enter" && goToAllTickets({ reporter: r.name })} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer" }} title="View in All Tickets">
                             <div style={{ width: 10, height: 10, borderRadius: 3, background: r.color, flexShrink: 0 }} />
@@ -1100,7 +1154,10 @@ export default function HLPDashboard() {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
                   {/* FR Bucket Pie */}
                   <div style={{ background: "#1e293b", borderRadius: 14, padding: 20, border: "1px solid #334155" }}>
-                    <h3 style={{ margin: "0 0 14px 0", fontSize: 14, fontWeight: 700, color: "#cbd5e1" }}>First Response Distribution</h3>
+                    <h3 style={{ margin: "0 0 6px 0", fontSize: 14, fontWeight: 700, color: "#cbd5e1" }}>First Response SLA Distribution</h3>
+                    <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
+                      Same-working-day SLA (Mon–Fri, 10:30–18:30; weekends excluded)
+                    </div>
                     <div style={{ display: "flex", alignItems: "center" }}>
                       <ResponsiveContainer width="55%" height={220}>
                         <PieChart style={{ cursor: "pointer" }}><Pie data={frBucketsFiltered} cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={3} dataKey="value" stroke="none" onClick={(data) => goToAllTickets(data?.name != null ? { frBucket: data.name, resBucket: "" } : {})}>
@@ -1312,9 +1369,9 @@ export default function HLPDashboard() {
                           <td style={{ padding: "10px 14px", color: "#94a3b8", fontSize: 12 }}>{t.assignee}</td>
                           <td style={{ padding: "10px 14px", color: "#64748b", fontSize: 12 }}>{t.category}</td>
                           <td style={{ padding: "10px 14px", color: "#64748b", fontSize: 12 }}>{t.labels[0] || "—"}</td>
-                          <td style={{ padding: "10px 14px" }}><FRBadge mins={t.frMins} /></td>
+                          <td style={{ padding: "10px 14px" }}><FRBadge mins={t.frMins} pass={t.frSlaPass === true} /></td>
                           <td style={{ padding: "10px 14px" }}><ResolutionBadge resHrs={t.resHrs} doneAt={t.doneAt} /></td>
-                          <td style={{ padding: "10px 14px" }}><SLABadge mins={t.frMins} /></td>
+                          <td style={{ padding: "10px 14px" }}><SLABadge mins={t.frMins} pass={t.frSlaPass === true} /></td>
                         </tr>
                       ))}
                     </tbody>
@@ -1330,7 +1387,7 @@ export default function HLPDashboard() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, fontSize: 13, color: overviewStats.passRate >= 70 ? "#bbf7d0" : "#fecaca", lineHeight: 1.6 }}>
                 <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: 14 }}>
                   <strong style={{ color: "#fff" }}>FR SLA: {overviewStats.passRate}% pass rate</strong><br />
-                  {overviewStats.within30} of {overviewStats.total} responded within 0–30m. {overviewStats.noResp} tickets have no response.
+                  {overviewStats.withinSla} of {overviewStats.total} responded within {SLA_FR_LABEL}. {overviewStats.noResp} tickets have no response.
                 </div>
                 <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: 14 }}>
                   <strong style={{ color: "#fff" }}>Avg Resolution time: {overviewStats.avgRes ? (overviewStats.avgRes < 24 ? `${overviewStats.avgRes.toFixed(1)}h` : `${(overviewStats.avgRes / 24).toFixed(1)}d`) : "—"}</strong><br />
