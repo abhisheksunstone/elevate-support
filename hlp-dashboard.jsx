@@ -66,6 +66,14 @@ function endOfBusinessWindow(date) {
   return d;
 }
 
+function isWithinBusinessWindow(date) {
+  if (!isBusinessDay(date)) return false;
+  const ts = new Date(date).getTime();
+  const start = startOfBusinessWindow(date).getTime();
+  const end = endOfBusinessWindow(date).getTime();
+  return ts >= start && ts <= end;
+}
+
 function nextBusinessDay(date) {
   const d = new Date(date);
   do {
@@ -149,6 +157,31 @@ const SUPPORT_LEVELS = {
   L2: ["sai", "isha", "akshay", "abhishek", "suchi"],
 };
 
+const SUPPORT_LEVEL_COLORS = {
+  L1: "#06b6d4",
+  L2: "#a855f7",
+};
+
+function normalizeName(value) {
+  return (value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function getSupportLevel(assigneeName) {
+  const normalized = normalizeName(assigneeName);
+  if (!normalized) return null;
+  const tokens = normalized.split(" ").filter(Boolean);
+  const byToken = (group) => group.some(name => tokens.includes(name));
+  const byContains = (group) => group.some(name => normalized.includes(name));
+
+  if (byToken(SUPPORT_LEVELS.L1) || byContains(SUPPORT_LEVELS.L1)) return "L1";
+  if (byToken(SUPPORT_LEVELS.L2) || byContains(SUPPORT_LEVELS.L2)) return "L2";
+  return null;
+}
+
 const JiraLink = ({ issueKey }) => (
   <a href={JIRA_BASE + issueKey} target="_blank" rel="noopener noreferrer"
     style={{ color: "#818cf8", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}
@@ -168,8 +201,18 @@ function FRBadge({ mins, pass }) {
   return <span style={{ color: pass ? "#22c55e" : "#ef4444", fontWeight: 700, fontSize: 12 }}>{display}</span>;
 }
 
-function SLABadge({ mins, pass }) {
+function SLABadge({ mins, pass, waived }) {
   if (mins === null) return <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: "#64748b22", color: "#94a3b8", border: "1px solid #64748b44" }}>No resp</span>;
+  if (waived) {
+    return (
+      <span
+        title="Pass due to after-hours response waiver"
+        style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: "#22c55e22", color: "#22c55e", border: "1px solid #22c55e44" }}
+      >
+        Pass (After-hours support)
+      </span>
+    );
+  }
   return <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600,
     background: pass ? "#22c55e22" : "#ef444422", color: pass ? "#22c55e" : "#ef4444",
     border: `1px solid ${pass ? "#22c55e" : "#ef4444"}44` }}>{pass ? "Pass" : "Breach"}</span>;
@@ -263,13 +306,18 @@ function processData(rawIssues) {
   const tickets = rawIssues.map(issue => {
     let frMins = null;
     let frSlaPass = null;
+    let frSlaWaived = false;
     let frBreachMins = null;
     if (issue.created && issue.firstTeamCommentDate) {
       const created = new Date(issue.created);
       const firstResp = new Date(issue.firstTeamCommentDate);
       frMins = businessMinutesBetween(created, firstResp);
       const deadline = getFrSlaDeadline(created);
-      frSlaPass = !!deadline && firstResp <= deadline;
+      const basePass = !!deadline && firstResp <= deadline;
+      const sameCalendarDay = toLocalDateKey(created) === toLocalDateKey(firstResp);
+      const afterHoursWaiver = sameCalendarDay && !isWithinBusinessWindow(firstResp);
+      frSlaWaived = !basePass && afterHoursWaiver;
+      frSlaPass = basePass || frSlaWaived;
       if (!frSlaPass && deadline) frBreachMins = businessMinutesBetween(deadline, firstResp);
     }
 
@@ -287,12 +335,14 @@ function processData(rawIssues) {
       summary: issue.summary,
       status: issue.status,
       assignee: issue.assignee || "Unassigned",
+      supportLevel: getSupportLevel(issue.assignee || "Unassigned"),
       reporter: issue.reporter || "Unknown",
       labels: issue.labels || [],
       category: issue.category || "Unknown",
       created: issue.created,
       frMins,
       frSlaPass,
+      frSlaWaived,
       frBreachMins,
       resHrs,
       doneAt,
@@ -343,16 +393,11 @@ function processData(rawIssues) {
   const frTimes = tickets.filter(t => t.frMins !== null).map(t => t.frMins);
   const noResp = tickets.filter(t => t.frMins === null).length;
   const frPass = tickets.filter(t => t.frSlaPass === true).length;
-  const breachMins = tickets.filter(t => t.frBreachMins != null).map(t => t.frBreachMins);
-  const breach0to4h = breachMins.filter(m => m > 0 && m <= 240).length;
-  const breach4to8h = breachMins.filter(m => m > 240 && m <= 480).length;
-  const breach8hPlus = breachMins.filter(m => m > 480).length;
+  const outsideSla = tickets.filter(t => t.frSlaPass === false && t.frMins !== null).length;
 
   const frBuckets = [
     { name: "Within SLA", value: frPass, color: "#22c55e" },
-    { name: "Breach 0–4h", value: breach0to4h, color: "#f59e0b" },
-    { name: "Breach 4–8h", value: breach4to8h, color: "#f97316" },
-    { name: "Breach 8h+", value: breach8hPlus, color: "#dc2626" },
+    { name: "Outside SLA", value: outsideSla, color: "#ef4444" },
     { name: "No Response", value: noResp, color: "#64748b" },
   ].filter(b => b.value > 0);
 
@@ -447,6 +492,7 @@ export default function HLPDashboard() {
   const [filterLabel, setFilterLabel] = useState("");
   const [filterReporter, setFilterReporter] = useState("");
   const [filterNoResponse, setFilterNoResponse] = useState(""); // "" | "noResponse" | "hasResponse"
+  const [filterSupportLevel, setFilterSupportLevel] = useState(""); // "" | "L1" | "L2"
   const [filterFrBucket, setFilterFrBucket] = useState(""); // from FR Distribution click; no UI on All Tickets
   const [filterResBucket, setFilterResBucket] = useState(""); // from Resolution Distribution click
   // Click-only filters: applied to All Tickets list when navigating from a chart click; dropdowns stay unchanged
@@ -456,11 +502,12 @@ export default function HLPDashboard() {
   const [filterLabelClick, setFilterLabelClick] = useState("");
   const [filterReporterClick, setFilterReporterClick] = useState("");
   const [filterNoResponseClick, setFilterNoResponseClick] = useState("");
+  const [filterSupportLevelClick, setFilterSupportLevelClick] = useState(""); // "" | "L1" | "L2"
   const [frGroupMode, setFrGroupMode] = useState("category");
   const [resGroupMode, setResGroupMode] = useState("category");
 
   const filtersRef = useRef({});
-  filtersRef.current = { status: filterStatus, assignee: filterAssignee, category: filterCategory, label: filterLabel, reporter: filterReporter, noResponse: filterNoResponse, frBucket: filterFrBucket, resBucket: filterResBucket, statusClick: filterStatusClick, assigneeClick: filterAssigneeClick, categoryClick: filterCategoryClick, labelClick: filterLabelClick, reporterClick: filterReporterClick, noResponseClick: filterNoResponseClick };
+  filtersRef.current = { status: filterStatus, assignee: filterAssignee, category: filterCategory, label: filterLabel, reporter: filterReporter, noResponse: filterNoResponse, frBucket: filterFrBucket, resBucket: filterResBucket, statusClick: filterStatusClick, assigneeClick: filterAssigneeClick, categoryClick: filterCategoryClick, labelClick: filterLabelClick, reporterClick: filterReporterClick, noResponseClick: filterNoResponseClick, supportLevelClick: filterSupportLevelClick };
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -486,12 +533,14 @@ export default function HLPDashboard() {
     setFilterLabel("");
     setFilterReporter("");
     setFilterNoResponse("");
+    setFilterSupportLevel("");
     setFilterStatusClick("");
     setFilterAssigneeClick("");
     setFilterCategoryClick("");
     setFilterLabelClick("");
     setFilterReporterClick("");
     setFilterNoResponseClick("");
+    setFilterSupportLevelClick("");
     setFilterFrBucket("");
     setFilterResBucket("");
   };
@@ -518,11 +567,7 @@ export default function HLPDashboard() {
     if (!bucketName) return true;
     if (bucketName === "No Response") return t.frMins == null;
     if (bucketName === "Within SLA") return t.frSlaPass === true;
-    if (t.frBreachMins == null) return false;
-    const m = t.frBreachMins;
-    if (bucketName === "Breach 0–4h") return m > 0 && m <= 240;
-    if (bucketName === "Breach 4–8h") return m > 240 && m <= 480;
-    if (bucketName === "Breach 8h+") return m > 480;
+    if (bucketName === "Outside SLA") return t.frSlaPass === false && t.frMins !== null;
     return false;
   };
   const ticketMatchesResBucket = (t, bucketName) => {
@@ -546,6 +591,7 @@ export default function HLPDashboard() {
   const effectiveLabel = filterLabel || filterLabelClick;
   const effectiveReporter = filterReporter || filterReporterClick;
   const effectiveNoResponse = filterNoResponse || filterNoResponseClick;
+  const effectiveSupportLevel = filterSupportLevel || filterSupportLevelClick;
 
   const filteredTickets = allTickets.filter(t => {
     if (effectiveStatus) {
@@ -564,11 +610,12 @@ export default function HLPDashboard() {
     if (effectiveNoResponse === "hasResponse" && t.frMins == null) return false;
     if (!ticketMatchesFrBucket(t, filterFrBucket)) return false;
     if (!ticketMatchesResBucket(t, filterResBucket)) return false;
+    if (effectiveSupportLevel && t.supportLevel !== effectiveSupportLevel) return false;
     return true;
   });
 
   // Same filters as All Tickets: Status, Assignee, Category, Label, Reporter (used by Overview, FR Analysis, Resolution Analysis)
-  const ticketsForOverview = allTickets.filter(t => {
+  const ticketsForOverviewBase = allTickets.filter(t => {
     if (filterStatus) {
       if (filterStatus === OPEN_STATUS_VALUE) { if (t.status === "Done") return false; }
       else if (t.status !== filterStatus) return false;
@@ -585,6 +632,27 @@ export default function HLPDashboard() {
     if (filterNoResponse === "hasResponse" && t.frMins == null) return false;
     return true;
   });
+  const ticketsForOverview = ticketsForOverviewBase.filter(t => !filterSupportLevel || t.supportLevel === filterSupportLevel);
+
+  const getLevelStats = (tickets, level) => {
+    const list = tickets.filter(t => t.supportLevel === level);
+    const total = list.length;
+    const frPass = list.filter(t => t.frSlaPass === true).length;
+    const frNoResponse = list.filter(t => t.frMins == null).length;
+    const resolved = list.filter(t => t.status === "Done").length;
+    const resTimes = list.filter(t => t.resHrs != null).map(t => t.resHrs);
+    const avgRes = resTimes.length > 0 ? resTimes.reduce((a, b) => a + b, 0) / resTimes.length : 0;
+    return {
+      total,
+      frPass,
+      frNoResponse,
+      frPassRate: total > 0 ? Math.round(frPass / total * 100) : 0,
+      resolved,
+      avgRes,
+    };
+  };
+  const l1Stats = getLevelStats(ticketsForOverviewBase, "L1");
+  const l2Stats = getLevelStats(ticketsForOverviewBase, "L2");
 
   const categoryOverviewData = (() => {
     const map = {};
@@ -663,15 +731,10 @@ export default function HLPDashboard() {
   const frTimesFiltered = ticketsForOverview.filter(t => t.frMins !== null).map(t => t.frMins);
   const noRespFiltered = ticketsForOverview.filter(t => t.frMins === null).length;
   const passFiltered = ticketsForOverview.filter(t => t.frSlaPass === true).length;
-  const breachMinsFiltered = ticketsForOverview.filter(t => t.frBreachMins != null).map(t => t.frBreachMins);
-  const breach0to4hF = breachMinsFiltered.filter(m => m > 0 && m <= 240).length;
-  const breach4to8hF = breachMinsFiltered.filter(m => m > 240 && m <= 480).length;
-  const breach8hPlusF = breachMinsFiltered.filter(m => m > 480).length;
+  const outsideSlaFiltered = ticketsForOverview.filter(t => t.frSlaPass === false && t.frMins !== null).length;
   const frBucketsFiltered = [
     { name: "Within SLA", value: passFiltered, color: "#22c55e" },
-    { name: "Breach 0–4h", value: breach0to4hF, color: "#f59e0b" },
-    { name: "Breach 4–8h", value: breach4to8hF, color: "#f97316" },
-    { name: "Breach 8h+", value: breach8hPlusF, color: "#dc2626" },
+    { name: "Outside SLA", value: outsideSlaFiltered, color: "#ef4444" },
     { name: "No Response", value: noRespFiltered, color: "#64748b" },
   ].filter(b => b.value > 0);
   const frStatsFiltered = {
@@ -820,6 +883,7 @@ export default function HLPDashboard() {
     setFilterLabelClick(filters.label !== undefined ? filters.label : (clearAll ? "" : current.labelClick));
     setFilterReporterClick(filters.reporter !== undefined ? filters.reporter : (clearAll ? "" : current.reporterClick));
     setFilterNoResponseClick(filters.noResponse !== undefined ? filters.noResponse : (clearAll ? "" : current.noResponseClick));
+    setFilterSupportLevelClick(filters.supportLevel !== undefined ? filters.supportLevel : (clearAll ? "" : current.supportLevelClick));
     setFilterFrBucket(filters.frBucket !== undefined ? filters.frBucket : (clearAll ? "" : current.frBucket));
     setFilterResBucket(filters.resBucket !== undefined ? filters.resBucket : (clearAll ? "" : current.resBucket));
     setTab("All Tickets");
@@ -967,6 +1031,14 @@ export default function HLPDashboard() {
                     <option value="hasResponse">Has response</option>
                   </select>
                 </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <label style={{ fontSize: 12, color: "#94a3b8", fontWeight: 600 }}>Support level</label>
+                  <select value={filterSupportLevel} onChange={e => setFilterSupportLevel(e.target.value)} style={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 6, padding: "4px 8px", color: "#e2e8f0", fontSize: 12, cursor: "pointer", minWidth: 110 }}>
+                    <option value="">All</option>
+                    <option value="L1">L1</option>
+                    <option value="L2">L2</option>
+                  </select>
+                </div>
                 <span style={{ fontSize: 12, color: "#64748b", marginLeft: "auto" }}>
                   {ticketsForOverview.length} of {allTickets.length} tickets
                 </span>
@@ -1105,6 +1177,32 @@ export default function HLPDashboard() {
             {/* ===== FR ANALYSIS ===== */}
             {tab === "FR Analysis" && (
               <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+                  <div role="button" tabIndex={0} onClick={() => goToAllTickets()} onKeyDown={e => e.key === "Enter" && goToAllTickets()} title="View all tickets" style={{ background: "#1e293b", borderRadius: 10, padding: "12px 14px", border: "1px solid #334155", cursor: "pointer" }}>
+                    <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 700, marginBottom: 6 }}>Total</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#94a3b8" }}>
+                      <span>All Tickets: <strong style={{ color: "#e2e8f0" }}>{ticketsForOverviewBase.length}</strong></span>
+                      <span>L1: <strong style={{ color: SUPPORT_LEVEL_COLORS.L1 }}>{ticketsForOverviewBase.length > 0 ? Math.round(l1Stats.total / ticketsForOverviewBase.length * 100) : 0}%</strong></span>
+                      <span>L2: <strong style={{ color: SUPPORT_LEVEL_COLORS.L2 }}>{ticketsForOverviewBase.length > 0 ? Math.round(l2Stats.total / ticketsForOverviewBase.length * 100) : 0}%</strong></span>
+                    </div>
+                  </div>
+                  {[
+                    { level: "L1", stats: l1Stats },
+                    { level: "L2", stats: l2Stats },
+                  ].map(({ level, stats }) => (
+                    <div key={level} role="button" tabIndex={0} onClick={() => goToAllTickets({ supportLevel: level })} onKeyDown={e => e.key === "Enter" && goToAllTickets({ supportLevel: level })} title={`View ${level} tickets in All Tickets`} style={{ background: "#1e293b", borderRadius: 10, padding: "12px 14px", border: "1px solid #334155", cursor: "pointer" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                        <span style={{ fontSize: 12, color: SUPPORT_LEVEL_COLORS[level], fontWeight: 700 }}>{level}</span>
+                        <span style={{ fontSize: 11, color: "#64748b" }}>{ticketsForOverviewBase.length > 0 ? Math.round(stats.total / ticketsForOverviewBase.length * 100) : 0}% of total</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#94a3b8" }}>
+                        <span>Tickets: <strong style={{ color: "#e2e8f0" }}>{stats.total}</strong></span>
+                        <span>FR Pass: <strong style={{ color: "#e2e8f0" }}>{stats.frPassRate}%</strong></span>
+                        <span>No resp: <strong style={{ color: "#e2e8f0" }}>{stats.frNoResponse}</strong></span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
                 {/* Grouped bar: Assignee × Category or Label */}
                 <div style={{ background: "#1e293b", borderRadius: 14, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
@@ -1203,6 +1301,32 @@ export default function HLPDashboard() {
             {/* ===== RESOLUTION ANALYSIS ===== */}
             {tab === "Resolution Analysis" && (
               <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+                  <div role="button" tabIndex={0} onClick={() => goToAllTickets()} onKeyDown={e => e.key === "Enter" && goToAllTickets()} title="View all tickets" style={{ background: "#1e293b", borderRadius: 10, padding: "12px 14px", border: "1px solid #334155", cursor: "pointer" }}>
+                    <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 700, marginBottom: 6 }}>Total</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#94a3b8" }}>
+                      <span>All Tickets: <strong style={{ color: "#e2e8f0" }}>{ticketsForOverviewBase.length}</strong></span>
+                      <span>L1: <strong style={{ color: SUPPORT_LEVEL_COLORS.L1 }}>{ticketsForOverviewBase.length > 0 ? Math.round(l1Stats.total / ticketsForOverviewBase.length * 100) : 0}%</strong></span>
+                      <span>L2: <strong style={{ color: SUPPORT_LEVEL_COLORS.L2 }}>{ticketsForOverviewBase.length > 0 ? Math.round(l2Stats.total / ticketsForOverviewBase.length * 100) : 0}%</strong></span>
+                    </div>
+                  </div>
+                  {[
+                    { level: "L1", stats: l1Stats },
+                    { level: "L2", stats: l2Stats },
+                  ].map(({ level, stats }) => (
+                    <div key={level} role="button" tabIndex={0} onClick={() => goToAllTickets({ supportLevel: level })} onKeyDown={e => e.key === "Enter" && goToAllTickets({ supportLevel: level })} title={`View ${level} tickets in All Tickets`} style={{ background: "#1e293b", borderRadius: 10, padding: "12px 14px", border: "1px solid #334155", cursor: "pointer" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                        <span style={{ fontSize: 12, color: SUPPORT_LEVEL_COLORS[level], fontWeight: 700 }}>{level}</span>
+                        <span style={{ fontSize: 11, color: "#64748b" }}>{ticketsForOverviewBase.length > 0 ? Math.round(stats.total / ticketsForOverviewBase.length * 100) : 0}% of total</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#94a3b8" }}>
+                        <span>Tickets: <strong style={{ color: "#e2e8f0" }}>{stats.total}</strong></span>
+                        <span>Resolved: <strong style={{ color: "#e2e8f0" }}>{stats.resolved}</strong></span>
+                        <span>Avg Res: <strong style={{ color: "#e2e8f0" }}>{stats.avgRes ? (stats.avgRes < 24 ? `${stats.avgRes.toFixed(1)}h` : `${(stats.avgRes / 24).toFixed(1)}d`) : "—"}</strong></span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
                 {/* Grouped bar: Assignee × Category or Label */}
                 <div style={{ background: "#1e293b", borderRadius: 14, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
@@ -1371,7 +1495,7 @@ export default function HLPDashboard() {
                           <td style={{ padding: "10px 14px", color: "#64748b", fontSize: 12 }}>{t.labels[0] || "—"}</td>
                           <td style={{ padding: "10px 14px" }}><FRBadge mins={t.frMins} pass={t.frSlaPass === true} /></td>
                           <td style={{ padding: "10px 14px" }}><ResolutionBadge resHrs={t.resHrs} doneAt={t.doneAt} /></td>
-                          <td style={{ padding: "10px 14px" }}><SLABadge mins={t.frMins} pass={t.frSlaPass === true} /></td>
+                          <td style={{ padding: "10px 14px" }}><SLABadge mins={t.frMins} pass={t.frSlaPass === true} waived={t.frSlaWaived === true} /></td>
                         </tr>
                       ))}
                     </tbody>
